@@ -1,0 +1,197 @@
+set session sql_mode='STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION';
+set @sid='CN750012';
+set @start_day='2017-06-15';
+set @end_day='2017-06-15';
+
+
+select  
+market.market,#市场区域
+market.operation,#营运区域
+market.steering,#督导区域
+market.sid,#餐厅编码
+market.sname,#餐厅名称
+market.psncode,#员工编码
+market.name,#员工姓名
+'本店员工' as employee_attributes,#员工属性
+job_title.employment_mode,#用工方式
+employment.employment_mode as job_name,#职位名称
+basic.bank_account,#银行账户
+basic.current_wage,#时薪
+times_not_holiday as weekday_hours,#平日工时
+times_holiday as holiday_hours,#节假日工时
+count_time,#总工时
+0 as night_allowance,#夜班补贴
+ifnull(amount_of_money.replenishment,0) as replenishment,#补款
+ifnull(amount_of_money.debit,0) as debit,#扣款
+ifnull(amount_of_money.annealing_boots,0) as annealing_boots,#退工艺水靴
+ifnull(amount_of_money.buckle,0) as buckle,#扣工衣水鞋
+ifnull(amount_of_money.buckle_bonus_room,0) as buckle_bonus_room,#送餐奖励
+ifnull(amount_of_money.replenishment_remarks,'~') as replenishment_remarks,#补款备注
+ifnull(amount_of_money.debit_remarks,'~') as debit_remarks,#扣款备注
+ifnull(amount_of_money.debit,'~') as room_service_award_description#送餐奖励说明
+FROM
+(
+select
+    name,
+    psncode,
+    bank_account,
+    current_wage,
+    sum(count_time) as count_time,
+    sum(is_not_holiday*count_time) as times_not_holiday,
+    sum(is_holiday*count_time) as times_holiday
+from 
+(
+    select
+        dates,
+        a.name,
+        psncode,
+        bank_account,
+        current_wage,
+        count_time,
+        if(b.date is null,0,1) as is_holiday,
+        if(b.date is null,1,0) as is_not_holiday
+    from
+    (
+
+        SELECT 
+            FROM_UNIXTIME(hra.attendance_time, '%Y-%m-%d') AS dates,
+            hrj.name,
+            hrj.psncode,
+            hrw.bank_account,
+            hrw.current_wage,
+            (ROUND((IF(hra.end_time1 - hra.start_time1 > 0, hra.end_time1 - hra.start_time1, 0) + IF(hra.end_time2 - hra.start_time2 > 0, hra.end_time2 - hra.start_time2, 0) + IF(hra.end_time3 - hra.start_time3 > 0, hra.end_time3 - hra.start_time3, 0) + IF(hra.end_time4 - hra.start_time4 > 0, hra.end_time4 - hra.start_time4, 0) + IF(hra.end_time5 - hra.start_time5 > 0, hra.end_time5 - hra.start_time5, 0) + IF(hra.end_time6 - hra.start_time6 > 0, hra.end_time6 - hra.start_time6, 0)) / 3600, 2)) AS count_time
+        FROM
+            erp.hr_attendance hra
+        LEFT JOIN erp.hr_jobinfo hrj ON hra.card_id = hrj.work_check_card
+        LEFT JOIN erp.hr_basicinfo hrb ON hrj.psncode = hrb.psncode
+        LEFT JOIN erp.hr_wageinfo hrw ON hrj.psncode = hrw.psncode
+        WHERE
+            DATE(FROM_UNIXTIME(hra.attendance_time)) BETWEEN @start_day AND @end_day
+            AND hra.status = 1
+            AND hrb.bind_sid in (@sid)
+        
+    ) a
+    left join  erp.hr_attendance_holiday b on a.dates=b.date
+) a
+group by psncode
+) as basic
+left JOIN
+(
+select 
+        b.market,
+        b.operation,
+        b.steering,
+        b.sid,
+        b.sname,
+        a.psncode,
+        a.name,
+        a.attendance_time
+        
+    from
+    (
+    select 
+        hrb.bind_sid,
+        hrb.psncode,
+        hrb.name,
+        hra.attendance_time
+    from  
+        erp.hr_attendance hra 
+    join 
+        erp.hr_jobinfo hrj on hra.card_id = hrj.work_check_card
+    join 
+        erp.hr_basicinfo hrb on hrj.psncode = hrb.psncode 
+    where hra.status=1
+
+    ) as a
+    left JOIN
+    (
+        select 
+            market.market,
+            market.operation,
+            market.steering,
+            store.sid,
+            store.sname
+            
+        from 
+        (
+            select 
+                sid,
+                sname,
+                representative_id,
+                representative_name,
+                store_market
+            from 
+                de.reporting_cache_store group by sid
+        ) as store 
+        left join
+        (
+            select 
+                rcst1.tid,
+                ifnull(rcst4.name,'') as market,
+                rcst2.name as operation,
+                rcst1.name as steering
+            from 
+                de.reporting_cache_store_taxonomy rcst1 
+            left join 
+                de.reporting_cache_store_taxonomy rcst2 on rcst1.parent_id = rcst2.tid
+            left join 
+                de.reporting_cache_store_taxonomy rcst3 on rcst2.parent_id = rcst3.tid
+            left join
+                de.reporting_cache_store_taxonomy rcst4 on rcst4.tid = rcst3.parent_id
+            left join
+                de.reporting_cache_store_taxonomy rcst5 on rcst5.tid = rcst4.parent_id
+            where rcst1.category_name = 'market'
+        ) as market on store.store_market = market.tid
+    ) as b on a.bind_sid = b.sid 
+    where 
+    date(FROM_UNIXTIME(a.attendance_time)) between @start_day and @end_day
+    and a.bind_sid in (@sid)
+) as market on basic.psncode = market.psncode 
+left JOIN
+(
+select 
+    hrj.psncode,
+    data.name as employment_mode
+    
+from 
+    erp.hr_jobinfo hrj
+join 
+    erp.taxonomy_term_data data 
+on 
+    hrj.job_type=data.tid
+) as employment on basic.psncode=employment.psncode
+left JOIN
+(
+select 
+    hrj.psncode,
+    data.name as employment_mode
+    
+from 
+    erp.hr_jobinfo hrj
+join 
+    erp.taxonomy_term_data data 
+on 
+    hrj.position_name=data.tid
+) as job_title on market.psncode = job_title.psncode
+left join
+(
+SELECT
+employee_id,
+sum(case when subsidy_fine_type='补款' then subsidy_fine_amount else 0 end) as replenishment,
+sum(case when subsidy_fine_type='扣款' then subsidy_fine_amount else 0 end) as debit,
+sum(case when subsidy_fine_type='退工艺水靴' then subsidy_fine_amount else 0 end) as annealing_boots, 
+sum(case when subsidy_fine_type='扣工衣水靴' then subsidy_fine_amount else 0 end) as buckle, 
+sum(case when subsidy_fine_type='扣送餐奖励' then subsidy_fine_amount else 0 end) as buckle_bonus_room, 
+sum(case when subsidy_fine_type='补款' then description else 0 end) as replenishment_remarks, 
+sum(case when subsidy_fine_type='扣款' then description else 0 end) as debit_remarks,
+sum(case when subsidy_fine_type='送餐奖励' then description else 0 end) as room_service_award_description
+from
+erp.hr_subsidy_fine
+where 
+
+    date(FROM_UNIXTIME(subsidy_fine_date)) between @start_day and @end_day
+group by employee_id
+
+) as amount_of_money on basic.psncode = amount_of_money.employee_id
+group by basic.psncode
+order by sid
