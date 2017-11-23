@@ -1,0 +1,11 @@
+mkdir test1
+cd test1
+git init
+git remote add origin git@github.com:xiaoyang12321/test.git
+git pull
+git checkout master
+git status
+git add .
+git commit -m 'init'
+git push
+git status
